@@ -1,3 +1,4 @@
+// ./maelstrom test -w pn-counter --bin target/debug/g-counter --time-limit 30 --rate 10 --nemesis partition
 use std::{collections::HashMap, sync::Arc, time::Duration};
 
 use async_trait::async_trait;

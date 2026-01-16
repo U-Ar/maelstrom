@@ -1,3 +1,4 @@
+// ./maelstrom test -w g-set --bin target/debug/g-set --time-limit 20 --rate 10
 use std::{collections::HashSet, sync::Arc, time::Duration};
 
 use async_trait::async_trait;

@@ -1,3 +1,4 @@
+// ./maelstrom test -w echo --bin target/debug/echo --nodes n1 --time-limit 10
 use std::sync::Arc;
 
 use async_trait::async_trait;

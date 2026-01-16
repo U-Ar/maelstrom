@@ -1,3 +1,4 @@
+// ./maelstrom test -w txn-list-append --bin target/debug/datomic2 --time-limit 10 --node-count 2 --rate 100
 use std::{
     collections::HashMap,
     sync::{Arc, atomic::AtomicU64},
