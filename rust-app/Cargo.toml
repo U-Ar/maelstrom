@@ -1,0 +1,36 @@
+[package]
+name = "rust-app"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+async-trait = "0.1.89"
+env_logger = "0.11.8"
+log = "0.4.29"
+serde = { version="1.0.228", features=["derive"] }
+serde_json = "1.0.145"
+tokio = { version="1.48.0", features=["full"] }
+
+[[bin]]
+name = "echo"
+path = "src/echo.rs"
+
+[[bin]]
+name = "broadcast"
+path = "src/broadcast.rs"
+
+[[bin]]
+name = "g-set"
+path = "src/g-set.rs"
+
+[[bin]]
+name = "g-counter"
+path = "src/g-counter.rs"
+
+[[bin]]
+name = "datomic"
+path = "src/datomic.rs"
+
+[[bin]]
+name = "datomic2"
+path = "src/datomic2.rs"
