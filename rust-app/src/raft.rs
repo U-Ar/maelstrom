@@ -4,11 +4,22 @@ use std::{collections::HashMap, sync::Arc};
 
 use async_trait::async_trait;
 use rust_app::node::{Handler, Message, Node, RPCError};
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 use tokio::sync::Mutex;
 
-type RaftKey = u64;
-type RaftValue = u64;
+type RaftValue = serde_json::Value;
+
+fn number_or_string<'de, D>(deserializer: D) -> Result<String, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let v = serde_json::Value::deserialize(deserializer)?;
+    match v {
+        serde_json::Value::Number(n) => Ok(n.to_string()),
+        serde_json::Value::String(s) => Ok(s),
+        _ => Err(serde::de::Error::custom("expected number or string")),
+    }
+}
 
 #[derive(Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", tag = "type")]
@@ -18,21 +29,24 @@ pub enum RaftRequest {
         node_ids: Vec<String>,
     },
     Read {
-        key: RaftKey,
+        #[serde(deserialize_with = "number_or_string")]
+        key: String,
     },
     Write {
-        key: RaftKey,
+        #[serde(deserialize_with = "number_or_string")]
+        key: String,
         value: RaftValue,
     },
     Cas {
-        key: RaftKey,
+        #[serde(deserialize_with = "number_or_string")]
+        key: String,
         from: RaftValue,
         to: RaftValue,
     },
 }
 
 struct RaftHandler {
-    map: Mutex<HashMap<RaftKey, RaftValue>>,
+    map: Mutex<HashMap<String, RaftValue>>,
 }
 
 impl RaftHandler {
