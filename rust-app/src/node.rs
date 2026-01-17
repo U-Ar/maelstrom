@@ -76,7 +76,6 @@ pub struct NodeInner {
     pub membership: OnceCell<Membership>,
     pub handler: OnceCell<Arc<dyn Handler>>,
     pub callbacks: Mutex<HashMap<u64, Sender<Message>>>,
-    pub periodic_tasks: Mutex<Vec<tokio::task::JoinHandle<()>>>,
 }
 
 #[allow(dead_code)]
@@ -113,7 +112,6 @@ impl Node {
                 membership: OnceCell::new(),
                 handler: OnceCell::new(),
                 callbacks: Mutex::new(HashMap::new()),
-                periodic_tasks: Mutex::new(Vec::new()),
             }),
         }
     }
