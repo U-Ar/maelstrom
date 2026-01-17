@@ -1,7 +1,7 @@
 use std::{collections::HashSet, sync::Arc};
 
 use async_trait::async_trait;
-use rust_app::node::{Handler, Message, Node, Request};
+use rust_app::node::{Handler, Message, Node, RPCError, Request};
 use tokio::sync::Mutex;
 
 struct BroadcastHandler {
@@ -15,7 +15,7 @@ struct BroadcastInner {
 
 #[async_trait]
 impl Handler for BroadcastHandler {
-    async fn handle(&self, node: Node, message: &Message) {
+    async fn handle(&self, node: Node, message: &Message) -> Result<(), RPCError> {
         let body = serde_json::from_value::<Request>(message.body.clone()).unwrap();
 
         match body {
@@ -29,7 +29,7 @@ impl Handler for BroadcastHandler {
                     .unwrap_or_default();
                 let mut inner = self.inner.lock().await;
                 inner.neighbors = neighbors;
-                node.log(&format!(
+                node.log(format!(
                     "Set neighbors for node {}: {:?}",
                     node.get_node_id(),
                     inner.neighbors
@@ -63,13 +63,13 @@ impl Handler for BroadcastHandler {
                     for neighbor_rx in neighbors {
                         let reply = neighbor_rx.await;
                         if let Ok(reply) = reply {
-                            node.log(&format!(
+                            node.log(format!(
                                 "Received reply from neighbor {}: {:?}",
                                 msg, reply.body
                             ));
                         }
                     }
-                    node.log(&format!(
+                    node.log(format!(
                         "Node {} broadcasted message {} to neighbors successfully",
                         node.get_node_id(),
                         msg
@@ -87,9 +87,12 @@ impl Handler for BroadcastHandler {
                 )
             }
             _ => {
-                node.log("Unexpected message type for broadcast");
+                return Err(RPCError::NotSupported(
+                    "Operation not supported".to_string(),
+                ));
             }
         }
+        Ok(())
     }
 }
 

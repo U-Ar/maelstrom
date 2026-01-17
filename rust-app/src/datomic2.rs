@@ -5,7 +5,7 @@ use std::{
 };
 
 use async_trait::async_trait;
-use rust_app::node::{Handler, Message, Node, Request};
+use rust_app::node::{Handler, Message, Node, RPCError, Request};
 use tokio::sync::Mutex;
 
 const LIN_KV_ROOT_KEY: &str = "root";
@@ -111,7 +111,7 @@ impl DatomicHandler {
 
 #[async_trait]
 impl Handler for DatomicHandler {
-    async fn handle(&self, node: Node, message: &Message) {
+    async fn handle(&self, node: Node, message: &Message) -> Result<(), RPCError> {
         let body = serde_json::from_value::<Request>(message.body.clone()).unwrap();
 
         match body {
@@ -195,11 +195,15 @@ impl Handler for DatomicHandler {
                                 map2.insert(key.to_string(), serde_json::Value::String(list_id2));
                             }
                             _ => {
-                                result.push(serde_json::json!({"error": "unknown operation"}));
+                                return Err(RPCError::NotSupported(
+                                    "Operation not supported".to_string(),
+                                ));
                             }
                         },
                         _ => {
-                            result.push(serde_json::json!({"error": "invalid operation format"}));
+                            return Err(RPCError::NotSupported(
+                                "Operation not supported".to_string(),
+                            ));
                         }
                     }
                 }
@@ -225,18 +229,16 @@ impl Handler for DatomicHandler {
                         }),
                     );
                 } else {
-                    node.reply(
-                        message,
-                        serde_json::json!({
-                            "type": "error",
-                            "code": 30,
-                            "text": "CAS failed!",
-                        }),
-                    );
+                    return Err(RPCError::TxnConflict("CAS failed!".to_string()));
                 }
             }
-            _ => {}
+            _ => {
+                return Err(RPCError::NotSupported(
+                    "Operation not supported".to_string(),
+                ));
+            }
         }
+        Ok(())
     }
 }
 

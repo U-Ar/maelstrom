@@ -34,3 +34,7 @@ path = "src/datomic.rs"
 [[bin]]
 name = "datomic2"
 path = "src/datomic2.rs"
+
+[[bin]]
+name = "raft"
+path = "src/raft.rs"

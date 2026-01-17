@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use rust_app::node::{Handler, Message, Node, Request};
+use rust_app::node::{Handler, Message, Node, RPCError, Request};
 
 const LIN_KV_KEY: &str = "root";
 const LIN_KV_NODE_ID: &str = "lin-kv";
@@ -13,7 +13,7 @@ struct DatomicHandler {
 struct DatomicInner {}
 #[async_trait]
 impl Handler for DatomicHandler {
-    async fn handle(&self, node: Node, message: &Message) {
+    async fn handle(&self, node: Node, message: &Message) -> Result<(), RPCError> {
         let body = serde_json::from_value::<Request>(message.body.clone()).unwrap();
 
         match body {
@@ -136,11 +136,13 @@ impl Handler for DatomicHandler {
                             "txn": result,
                         }),
                     );
-                    return;
                 }
             }
-            _ => {}
+            _ => {
+                return Err(RPCError::NotSupported("Operation not supported".to_string()));
+            }
         }
+        Ok(())
     }
 }
 

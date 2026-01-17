@@ -102,7 +102,7 @@ impl NodeInner {
 
 #[async_trait]
 pub trait Handler: Sync + Send {
-    async fn handle(&self, node: Node, message: &Message);
+    async fn handle(&self, node: Node, message: &Message) -> Result<(), RPCError>;
 }
 
 impl Node {
@@ -149,9 +149,16 @@ impl Node {
 
         let msg_type = message.body.get("type").unwrap().as_str().unwrap();
         if let Some(handler) = self.inner.handler.get() {
-            handler.handle(self.clone(), message).await;
+            if let Err(e) = handler.handle(self.clone(), message).await {
+                self.log(format!("Error handling message: {:?}", e));
+                self.reply(message, e.to_json());
+            }
         } else {
             eprintln!("No handler for message type: {:?}", msg_type);
+            self.reply(
+                message,
+                RPCError::NotSupported("Operation not supported".to_string()).to_json(),
+            );
         }
     }
 
@@ -191,8 +198,8 @@ impl Node {
         rx.await
     }
 
-    pub fn log(&self, message: &str) {
-        eprintln!("{}", message);
+    pub fn log(&self, message: impl AsRef<str>) {
+        eprintln!("{}", message.as_ref());
     }
 
     pub fn send(&self, dest: &str, body: serde_json::Value) {
@@ -258,5 +265,56 @@ impl Node {
 impl Default for Node {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[derive(Debug)]
+pub enum RPCError {
+    Timeout(String),
+    NodeNotFound(String),
+    NotSupported(String),
+    TemporarilyUnavailable(String),
+    MalformedRequest(String),
+    Crash(String),
+    Abort(String),
+    KeyDoesNotExist(String),
+    KeyAlreadyExists(String),
+    PreconditionFailed(String),
+    TxnConflict(String),
+}
+
+impl RPCError {
+    pub fn to_json(&self) -> serde_json::Value {
+        match self {
+            RPCError::Timeout(text) => {
+                serde_json::json!({"type": "error", "code": 0, "text": text})
+            }
+            RPCError::NodeNotFound(text) => {
+                serde_json::json!({"type": "error", "code": 1, "text": text})
+            }
+            RPCError::NotSupported(text) => {
+                serde_json::json!({"type": "error", "code": 10, "text": text})
+            }
+            RPCError::TemporarilyUnavailable(text) => {
+                serde_json::json!({"type": "error", "code": 11, "text": text})
+            }
+            RPCError::MalformedRequest(text) => {
+                serde_json::json!({"type": "error", "code": 12, "text": text})
+            }
+            RPCError::Crash(text) => serde_json::json!({"type": "error", "code": 13, "text": text}),
+            RPCError::Abort(text) => serde_json::json!({"type": "error", "code": 14, "text": text}),
+            RPCError::KeyDoesNotExist(text) => {
+                serde_json::json!({"type": "error", "code": 20, "text": text})
+            }
+            RPCError::KeyAlreadyExists(text) => {
+                serde_json::json!({"type": "error", "code": 21, "text": text})
+            }
+            RPCError::PreconditionFailed(text) => {
+                serde_json::json!({"type": "error", "code": 22, "text": text})
+            }
+            RPCError::TxnConflict(text) => {
+                serde_json::json!({"type": "error", "code": 23, "text": text})
+            }
+        }
     }
 }

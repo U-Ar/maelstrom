@@ -2,13 +2,13 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use rust_app::node::{Handler, Message, Node, Request};
+use rust_app::node::{Handler, Message, Node, RPCError, Request};
 
 struct EchoHandler {}
 
 #[async_trait]
 impl Handler for EchoHandler {
-    async fn handle(&self, node: Node, message: &Message) {
+    async fn handle(&self, node: Node, message: &Message) -> Result<(), RPCError> {
         let body = serde_json::from_value::<Request>(message.body.clone()).unwrap();
 
         match body {
@@ -23,9 +23,12 @@ impl Handler for EchoHandler {
                 }),
             ),
             _ => {
-                node.log("Unexpected message type for echo");
+                return Err(RPCError::NotSupported(
+                    "Operation not supported".to_string(),
+                ));
             }
         }
+        Ok(())
     }
 }
 
