@@ -66,6 +66,7 @@ enum State {
 struct RaftHandler {
     state_machine: Mutex<HashMap<String, RaftValue>>,
     control: Arc<Mutex<RaftControl>>,
+    node: Node,
 }
 
 impl RaftControl {
@@ -105,11 +106,11 @@ impl RaftControl {
 }
 
 struct RaftLog {
-    
+
 }
 
 impl RaftHandler {
-    pub fn new() -> Self {
+    pub fn new(node: Node) -> Self {
         RaftHandler {
             state_machine: Mutex::new(HashMap::new()),
             control: Arc::new(Mutex::new(RaftControl {
@@ -196,7 +197,8 @@ impl Handler for RaftHandler {
 }
 
 fn main() {
-    let node = Arc::new(Node::new());
-    node.set_handler(Arc::new(RaftHandler::new()));
+    let node_raw = Node::new();
+    let node = Arc::new(node_raw.clone());
+    node.set_handler(Arc::new(RaftHandler::new(node_raw)));
     node.run();
 }
