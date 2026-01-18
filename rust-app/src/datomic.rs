@@ -139,7 +139,9 @@ impl Handler for DatomicHandler {
                 }
             }
             _ => {
-                return Err(RPCError::NotSupported("Operation not supported".to_string()));
+                return Err(RPCError::NotSupported(
+                    "Operation not supported".to_string(),
+                ));
             }
         }
         Ok(())
