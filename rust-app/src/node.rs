@@ -196,6 +196,28 @@ impl Node {
         rx.await
     }
 
+    pub async fn brpc(&self, body: serde_json::Value) -> Vec<Receiver<Message>> {
+        let mut receivers = Vec::new();
+        for dest in &self.get_membership().node_ids {
+            if dest == self.get_node_id() {
+                continue;
+            }
+            let rx = self.rpc(dest, body.clone()).await;
+            receivers.push(rx);
+        }
+        receivers
+    }
+
+    pub async fn brpc_sync(&self, body: serde_json::Value) -> Vec<Result<Message, RecvError>> {
+        let mut results = Vec::new();
+        let receivers = self.brpc(body).await;
+        for rx in receivers {
+            let res = rx.await;
+            results.push(res);
+        }
+        results
+    }
+
     pub fn log(&self, message: impl AsRef<str>) {
         eprintln!("{}", message.as_ref());
     }
