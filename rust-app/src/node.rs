@@ -205,6 +205,7 @@ impl Node {
             let rx = self.rpc(dest, body.clone()).await;
             receivers.push(rx);
         }
+        self.log("broadcast sent");
         receivers
     }
 
@@ -212,6 +213,7 @@ impl Node {
         let mut results = Vec::new();
         let receivers = self.brpc(body).await;
         for rx in receivers {
+            self.log("awaiting broadcast response");
             let res = rx.await;
             results.push(res);
         }

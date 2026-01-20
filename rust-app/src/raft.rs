@@ -49,6 +49,12 @@ pub enum RaftRequest {
         from: RaftValue,
         to: RaftValue,
     },
+    RequestVote {
+        term: u64,
+        candidate_id: String,
+        last_log_index: u64,
+        last_log_term: u64,
+    },
 }
 
 #[derive(Serialize, Deserialize)]
@@ -58,11 +64,13 @@ enum RaftVoteResponse {
 }
 
 struct RaftControl {
+    node: Node,
+
     state: State,
     election_timeout: Duration,
     election_deadline: Instant,
     term: u64,
-    node: Node,
+    voted_for: Option<String>,
 }
 
 enum State {
@@ -82,6 +90,18 @@ impl RaftControl {
         self.term
     }
 
+    pub fn is_voted(&self) -> bool {
+        self.voted_for.is_some()
+    }
+
+    pub fn get_voted_for(&self) -> String {
+        self.voted_for.clone().unwrap()
+    }
+
+    pub fn set_voted_for(&mut self, candidate_id: String) {
+        self.voted_for = Some(candidate_id);
+    }
+
     pub fn passed_election_deadline(&self) -> bool {
         Instant::now() >= self.election_deadline
     }
@@ -97,6 +117,7 @@ impl RaftControl {
     pub async fn become_candidate(&mut self, last_log_index: u64, last_log_term: u64) {
         self.state = State::Candidate;
         self.advance_term(self.term + 1);
+        self.voted_for = Some(self.node.get_node_id().to_string());
         self.reset_election_deadline();
         self.node
             .log(format!("Becoming candidate for term {}", self.term));
@@ -116,6 +137,7 @@ impl RaftControl {
     pub fn advance_term(&mut self, new_term: u64) {
         if new_term > self.term {
             self.term = new_term;
+            self.voted_for = None;
         }
     }
 
@@ -136,6 +158,7 @@ impl RaftControl {
 
         let mut term = self.term;
 
+        self.node.log("starting vote request");
         let responses = self
             .node
             .brpc_sync(serde_json::json!(
@@ -148,6 +171,7 @@ impl RaftControl {
                 }
             ))
             .await;
+        self.node.log("collected vote request");
         for response in responses.iter().flatten() {
             let body = serde_json::from_value::<RaftVoteResponse>(response.body.clone()).unwrap();
             match body {
@@ -234,6 +258,7 @@ impl RaftHandler {
                 election_deadline: Instant::now(),
                 term: 0,
                 node,
+                voted_for: None,
             })),
             log: Arc::new(Mutex::new(RaftLog::new())),
         }
@@ -252,21 +277,23 @@ impl Handler for RaftHandler {
                 let log = self.log.clone();
                 tokio::spawn(async move {
                     loop {
-                        let mut control = control.lock().await;
-                        let log = log.lock().await;
-                        if control.passed_election_deadline() {
-                            if !control.is_leader() {
-                                control
-                                    .become_candidate(
-                                        log.len() as u64 - 1,
-                                        log.last().unwrap().term,
-                                    )
-                                    .await;
-                            } else {
-                                control.reset_election_deadline();
+                        {
+                            let mut control = control.lock().await;
+                            let log = log.lock().await;
+                            if control.passed_election_deadline() {
+                                if !control.is_leader() {
+                                    control
+                                        .become_candidate(
+                                            log.len() as u64 - 1,
+                                            log.last().unwrap().term,
+                                        )
+                                        .await;
+                                } else {
+                                    control.reset_election_deadline();
+                                }
                             }
                         }
-                        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+                        tokio::time::sleep(Duration::from_millis(rand::random_range(100..=200))).await;
                     }
                 });
             }
@@ -310,6 +337,53 @@ impl Handler for RaftHandler {
                         key
                     )));
                 }
+            }
+            RaftRequest::RequestVote {
+                term,
+                candidate_id,
+                last_log_index,
+                last_log_term,
+            } => {
+                node.log(format!(
+                    "Received vote request from {} for term {}",
+                    candidate_id, term
+                ));
+                let mut control = self.control.lock().await;
+                let log = self.log.lock().await;
+                node.log("acquired lock for vote request handling");
+                control.maybe_step_down(term).await;
+
+                let mut vote_granted = false;
+                if term < control.get_term() {
+                    node.log(format!(
+                        "Candidate term {} is less than current term {}",
+                        term,
+                        control.get_term()
+                    ));
+                } else if control.is_voted() {
+                    node.log(format!("Already voted for {}", control.get_voted_for()));
+                } else if last_log_term == log.last().unwrap().term
+                    && last_log_index < (log.len() as u64 - 1)
+                {
+                    node.log(format!(
+                        "Our logs are both at term {}, but candidate's log is not up-to-date",
+                        last_log_term
+                    ));
+                } else {
+                    node.log(format!("Voted for candidate {}", candidate_id));
+                    vote_granted = true;
+                    control.set_voted_for(candidate_id);
+                    control.reset_election_deadline();
+                }
+
+                node.reply(
+                    message,
+                    serde_json::json!({
+                        "type": "request_vote_res",
+                        "term": control.get_term(),
+                        "vote_granted": vote_granted,
+                    }),
+                );
             }
         }
         Ok(())
