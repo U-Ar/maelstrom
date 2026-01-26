@@ -7,10 +7,7 @@ use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use tokio::{
     io::AsyncBufReadExt,
-    sync::{
-        Mutex, OnceCell,
-        oneshot::{Receiver, Sender, error::RecvError},
-    },
+    sync::{Mutex, OnceCell, mpsc, oneshot},
 };
 
 #[derive(Deserialize, Serialize, Clone)]
@@ -66,6 +63,24 @@ pub enum Response {
     },
 }
 
+pub enum CallbackSender<T> {
+    OneShot(oneshot::Sender<T>),
+    Mpsc(mpsc::Sender<T>),
+}
+
+impl<T> CallbackSender<T> {
+    pub async fn send(self, value: T) {
+        match self {
+            CallbackSender::OneShot(tx) => {
+                let _ = tx.send(value);
+            }
+            CallbackSender::Mpsc(tx) => {
+                let _ = tx.send(value).await;
+            }
+        }
+    }
+}
+
 #[derive(Clone)]
 pub struct Node {
     pub inner: Arc<NodeInner>,
@@ -75,7 +90,8 @@ pub struct NodeInner {
     pub msg_id: AtomicU64,
     pub membership: OnceCell<Membership>,
     pub handler: OnceCell<Arc<dyn Handler>>,
-    pub callbacks: Mutex<HashMap<u64, Sender<Message>>>,
+    pub callbacks: Mutex<HashMap<u64, CallbackSender<Message>>>,
+    pub print_sender: OnceCell<mpsc::Sender<serde_json::Value>>,
 }
 
 #[allow(dead_code)]
@@ -112,6 +128,7 @@ impl Node {
                 membership: OnceCell::new(),
                 handler: OnceCell::new(),
                 callbacks: Mutex::new(HashMap::new()),
+                print_sender: OnceCell::new(),
             }),
         }
     }
@@ -124,11 +141,11 @@ impl Node {
         self.inner.get_membership()
     }
 
-    pub fn init(&self, message: &Message, node_id: String, node_ids: Vec<String>) {
+    pub async fn init(&self, message: &Message, node_id: String, node_ids: Vec<String>) {
         eprintln!("Initialized node {}", node_id);
         self.inner.set_membership(node_id, node_ids);
 
-        self.reply_ok(message);
+        self.reply_ok(message).await;
     }
 
     pub fn set_handler(&self, handler: Arc<dyn Handler>) {
@@ -137,10 +154,15 @@ impl Node {
 
     pub async fn handle(&self, message: &Message) {
         if let Some(in_reply_to) = message.body.get("in_reply_to") {
+            self.log(format!(
+                "Handling reply to msg_id {}",
+                in_reply_to.as_u64().unwrap()
+            ));
             let msg_id = in_reply_to.as_u64().unwrap();
             let mut callbacks = self.inner.callbacks.lock().await;
             if let Some(tx) = callbacks.remove(&msg_id) {
-                let _ = tx.send(message.clone());
+                let _ = tx.send(message.clone()).await;
+                self.log(format!("Delivered reply to handler for msg_id {}", msg_id));
                 return;
             }
         }
@@ -149,18 +171,19 @@ impl Node {
         if let Some(handler) = self.inner.handler.get() {
             if let Err(e) = handler.handle(self.clone(), message).await {
                 self.log(format!("Error handling message: {:?}", e));
-                self.reply(message, e.to_json());
+                self.reply(message, e.to_json()).await;
             }
         } else {
-            eprintln!("No handler for message type: {:?}", msg_type);
+            self.log(format!("No handler for message type: {:?}", msg_type));
             self.reply(
                 message,
                 RPCError::NotSupported("Operation not supported".to_string()).to_json(),
-            );
+            )
+            .await;
         }
     }
 
-    pub async fn rpc(&self, dest: &str, body: serde_json::Value) -> Receiver<Message> {
+    pub async fn rpc(&self, dest: &str, body: serde_json::Value) -> oneshot::Receiver<Message> {
         let (tx, rx) = tokio::sync::oneshot::channel();
         let body = match body {
             serde_json::Value::Object(mut map) => {
@@ -181,9 +204,9 @@ impl Node {
         let msg_id = body.get("msg_id").unwrap().as_u64().unwrap();
         {
             let mut callbacks = self.inner.callbacks.lock().await;
-            callbacks.insert(msg_id, tx);
+            callbacks.insert(msg_id, CallbackSender::OneShot(tx));
         }
-        self.send(dest, body);
+        self.send(dest, body).await;
         rx
     }
 
@@ -191,69 +214,117 @@ impl Node {
         &self,
         dest: &str,
         body: serde_json::Value,
-    ) -> Result<Message, RecvError> {
+    ) -> Result<Message, oneshot::error::RecvError> {
         let rx = self.rpc(dest, body).await;
         rx.await
     }
 
-    pub async fn brpc(&self, body: serde_json::Value) -> Vec<Receiver<Message>> {
-        let mut receivers = Vec::new();
+    // レスポンスが来たらcallback Senderから送信する
+    pub async fn rpc_with_callback(
+        &self,
+        dest: &str,
+        body: serde_json::Value,
+        callback: mpsc::Sender<Message>,
+    ) {
+        let msg_id = self
+            .inner
+            .msg_id
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        match body {
+            serde_json::Value::Object(mut map) => {
+                map.insert(
+                    "msg_id".to_string(),
+                    serde_json::Value::Number(msg_id.into()),
+                );
+                let send_body = serde_json::Value::Object(map);
+                {
+                    let mut callbacks = self.inner.callbacks.lock().await;
+                    callbacks.insert(msg_id, CallbackSender::Mpsc(callback));
+                }
+                self.send(dest, send_body).await;
+            }
+            _ => {
+                self.log(format!(
+                    "Message body to {} must be a JSON object: {:?}",
+                    dest, body
+                ));
+            }
+        };
+    }
+
+    pub async fn brpc_with_callback(
+        &self,
+        body: serde_json::Value,
+        callback: mpsc::Sender<Message>,
+    ) {
         for dest in &self.get_membership().node_ids {
             if dest == self.get_node_id() {
                 continue;
             }
-            let rx = self.rpc(dest, body.clone()).await;
-            receivers.push(rx);
+            self.rpc_with_callback(dest, body.clone(), callback.clone())
+                .await;
         }
-        self.log("broadcast sent");
-        receivers
     }
 
-    pub async fn brpc_sync(&self, body: serde_json::Value) -> Vec<Result<Message, RecvError>> {
-        let mut results = Vec::new();
-        let receivers = self.brpc(body).await;
-        for rx in receivers {
-            self.log("awaiting broadcast response");
-            let res = rx.await;
-            results.push(res);
-        }
-        results
-    }
-
+    #[cfg(debug_assertions)]
     pub fn log(&self, message: impl AsRef<str>) {
         eprintln!("{}", message.as_ref());
     }
 
-    pub fn send(&self, dest: &str, body: serde_json::Value) {
+    #[cfg(not(debug_assertions))]
+    pub fn log(&self, _message: impl AsRef<str>) {}
+
+    pub async fn send(&self, dest: &str, body: serde_json::Value) {
+        // TODO: 出力を専用チャンネルで非同期処理
         let out_message = Message {
             src: self.inner.get_membership().node_id.clone(),
             dest: dest.to_string(),
             body,
         };
-        let out_json = serde_json::to_string(&out_message).unwrap();
-        eprintln!("Sent {}", out_json);
-        println!("{}", out_json);
+        if let Some(print_sender) = self.inner.print_sender.get() {
+            let out_json = serde_json::to_value(&out_message).unwrap();
+            if let Err(err) = print_sender.send(out_json).await {
+                self.log(format!("Failed to send message to print channel: {}", err));
+            }
+        } else {
+            self.log("Print sender not initialized");
+        }
     }
 
-    pub fn reply(&self, message: &Message, mut body: serde_json::Value) {
+    pub async fn reply(&self, message: &Message, mut body: serde_json::Value) {
         let reply_dest = message.src.as_str();
         let in_reply_to = message.body.get("msg_id").unwrap().as_u64().unwrap();
-        if let serde_json::Value::Object(ref mut map) = body {
-            map.entry("in_reply_to")
-                .or_insert(serde_json::Value::Number(in_reply_to.into()));
-        } else {
-            panic!("Body must be a JSON object");
+
+        match body {
+            serde_json::Value::Object(ref mut map) => {
+                map.insert(
+                    "in_reply_to".to_string(),
+                    serde_json::Value::Number(in_reply_to.into()),
+                );
+                let send_body = serde_json::Value::Object(map.clone());
+                self.send(reply_dest, send_body).await;
+            }
+            _ => {
+                self.log(format!(
+                    "Reply body to {} must be a JSON object: {:?}",
+                    reply_dest, body
+                ));
+            }
         }
-        self.send(reply_dest, body);
     }
 
-    pub fn reply_ok(&self, message: &Message) {
-        self.reply(
-            message,
-            serde_json::json!({
-                "type": format!("{}_ok", message.body.get("type").unwrap().as_str().unwrap()),
-            }),
-        );
+    pub async fn reply_ok(&self, message: &Message) {
+        if let Some(msg_type) = message.body.get("type") {
+            self.reply(
+                message,
+                serde_json::json!({
+                    "type": format!("{}_ok", msg_type.as_str().unwrap()),
+                }),
+            )
+            .await;
+        } else {
+            self.log("Cannot reply_ok: message has no type field");
+        }
     }
 
     pub async fn serve(self: Arc<Self>) {
@@ -261,17 +332,25 @@ impl Node {
         let reader = tokio::io::BufReader::new(stdin);
         let mut lines = reader.lines();
 
+        let (print_sender, mut print_receiver) = mpsc::channel::<serde_json::Value>(100);
+        self.inner.print_sender.set(print_sender).unwrap();
+        tokio::spawn(async move {
+            while let Some(string) = print_receiver.recv().await {
+                println!("{}", string);
+            }
+        });
+
         while let Ok(Some(line)) = lines.next_line().await {
             let ptr = self.clone();
             tokio::spawn(async move {
-                eprintln!("Received: \"{}\"", line.escape_default());
+                ptr.log(format!("Received: \"{}\"", line.escape_default()));
 
                 match serde_json::from_str(&line) as Result<Message, _> {
                     Ok(message) => {
                         ptr.handle(&message).await;
                     }
                     Err(e) => {
-                        eprintln!("Error parsing JSON: {}", e);
+                        ptr.log(format!("Error parsing JSON: {}", e));
                     }
                 };
             });
