@@ -519,11 +519,11 @@ impl Raft {
             .await;
     }
 
-    async fn replicate_log(&mut self) {
+    async fn replicate_log(&mut self, force: bool) {
         let elapsed_time = Instant::now().duration_since(self.last_replication);
         let mut replicated = false;
 
-        if self.is_leader() && elapsed_time >= self.min_replication_interval {
+        if self.is_leader() && (elapsed_time >= self.min_replication_interval || force) {
             self.log("Replication interval reached, replicating logs to followers");
             for node_id in self.node.get_membership().node_ids.iter() {
                 if node_id == self.node.get_node_id() {
@@ -531,7 +531,10 @@ impl Raft {
                 }
 
                 let next_index = *self.next_index.get(node_id).unwrap();
-                let entries = self.log.entries[next_index..].to_vec();
+                if next_index > self.log.len() {
+                    continue;
+                }
+                let entries = self.log.entries[next_index - 1..].to_vec();
                 if !entries.is_empty() || elapsed_time >= self.heartbeat_interval {
                     replicated = true;
                     self.log(format!("Replicating log #{}+ to {}", next_index, node_id));
@@ -580,6 +583,7 @@ impl Raft {
 
     pub async fn handle_request(&mut self, request: RaftRequest) {
         let response_sender = request.response_tx;
+        let mut force_replicate = false;
         match &request.request {
             LinKvRequest::Init {
                 node_id: _node_id,
@@ -645,6 +649,7 @@ impl Raft {
                         src: request.src.clone(),
                         op: request.request.clone(),
                     });
+                    force_replicate = true;
                 } else if let Some(leader) = &self.leader {
                     self.node
                         .send(
@@ -678,6 +683,7 @@ impl Raft {
                 value,
             } => {
                 if self.is_leader() {
+                    force_replicate = true;
                     self.log(format!(
                         "Received write request from {} for key {}, value {}",
                         request.src, key, value
@@ -722,6 +728,7 @@ impl Raft {
                 to,
             } => {
                 if self.is_leader() {
+                    force_replicate = true;
                     self.log(format!(
                         "Received cas request from {} for key {}, from {}, to {}",
                         request.src, key, from, to
@@ -878,8 +885,8 @@ impl Raft {
                 self.leader = Some(leader_id.clone());
                 self.reset_election_deadline();
 
-                if *prev_log_index >= 1
-                    && self.log[*prev_log_index as usize - 1].term != *prev_log_term
+                if self.log.len() <= *prev_log_index as usize
+                    || (*prev_log_index > 0 && self.log[*prev_log_index as usize - 1].term != *prev_log_term)
                 {
                     if let Some(response_sender) = response_sender {
                         response_sender
@@ -953,9 +960,11 @@ impl Raft {
                 }
             }
             LinKvRequest::ReplicateLog {} => {
-                self.replicate_log().await;
+                self.replicate_log(false).await;
+                return;
             }
         }
+        self.replicate_log(force_replicate).await;
     }
 }
 
