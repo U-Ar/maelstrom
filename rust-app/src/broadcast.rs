@@ -20,7 +20,7 @@ impl Handler for BroadcastHandler {
 
         match body {
             Request::Init { node_id, node_ids } => {
-                node.init(message, node_id, node_ids);
+                node.init(message, node_id, node_ids).await;
             }
             Request::Topology { topology } => {
                 let neighbors = topology
@@ -34,11 +34,11 @@ impl Handler for BroadcastHandler {
                     node.get_node_id(),
                     inner.neighbors
                 ));
-                node.reply_ok(message);
+                node.reply_ok(message).await;
             }
             Request::Broadcast { message: msg } => {
                 if message.body.get("msg_id").is_some() {
-                    node.reply_ok(message);
+                    node.reply_ok(message).await;
                 }
 
                 let mut inner = self.inner.lock().await;
@@ -85,6 +85,7 @@ impl Handler for BroadcastHandler {
                         "messages": inner.messages,
                     }),
                 )
+                .await;
             }
             _ => {
                 return Err(RPCError::NotSupported(

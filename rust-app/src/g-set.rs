@@ -20,7 +20,7 @@ impl Handler for GSetHandler {
 
         match body {
             Request::Init { node_id, node_ids } => {
-                node.init(message, node_id, node_ids);
+                node.init(message, node_id, node_ids).await;
                 let (n0, h0) = (node.clone(), self.inner.clone());
                 tokio::spawn(async move {
                     loop {
@@ -49,7 +49,7 @@ impl Handler for GSetHandler {
             } => {
                 let mut inner = self.inner.lock().await;
                 inner.elements.insert(element.unwrap());
-                node.reply_ok(message);
+                node.reply_ok(message).await;
             }
             Request::Read {} => {
                 let inner = self.inner.lock().await;
@@ -60,6 +60,7 @@ impl Handler for GSetHandler {
                         "value": inner.elements,
                     }),
                 )
+                .await;
             }
             Request::Replicate {
                 value,
@@ -70,7 +71,7 @@ impl Handler for GSetHandler {
                 for element in value.unwrap() {
                     inner.elements.insert(element);
                 }
-                node.reply_ok(message);
+                node.reply_ok(message).await;
             }
             _ => {
                 return Err(RPCError::NotSupported(

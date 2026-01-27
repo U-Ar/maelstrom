@@ -886,7 +886,8 @@ impl Raft {
                 self.reset_election_deadline();
 
                 if self.log.len() <= *prev_log_index as usize
-                    || (*prev_log_index > 0 && self.log[*prev_log_index as usize - 1].term != *prev_log_term)
+                    || (*prev_log_index > 0
+                        && self.log[*prev_log_index as usize - 1].term != *prev_log_term)
                 {
                     if let Some(response_sender) = response_sender {
                         response_sender

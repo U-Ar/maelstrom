@@ -50,7 +50,7 @@ impl Handler for GCounterHandler {
         match body {
             Request::Init { node_id, node_ids } => {
                 self.inner.lock().await.init(&node_ids);
-                node.init(message, node_id, node_ids);
+                node.init(message, node_id, node_ids).await;
 
                 let (n0, h0) = (node.clone(), self.inner.clone());
                 tokio::spawn(async move {
@@ -94,7 +94,7 @@ impl Handler for GCounterHandler {
                         .or_insert(0);
                     *counter += -delta;
                 }
-                node.reply_ok(message);
+                node.reply_ok(message).await;
             }
             Request::Read {} => {
                 let inner = self.inner.lock().await;
@@ -105,6 +105,7 @@ impl Handler for GCounterHandler {
                         "value": inner.sum(),
                     }),
                 )
+                .await;
             }
             Request::Replicate {
                 value: _value,
@@ -122,7 +123,7 @@ impl Handler for GCounterHandler {
                         inner.dec.insert(k, v);
                     }
                 }
-                node.reply_ok(message);
+                node.reply_ok(message).await;
             }
             _ => {
                 return Err(RPCError::NotSupported(

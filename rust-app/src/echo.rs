@@ -13,15 +13,18 @@ impl Handler for EchoHandler {
 
         match body {
             Request::Init { node_id, node_ids } => {
-                node.init(message, node_id, node_ids);
+                node.init(message, node_id, node_ids).await;
             }
-            Request::Echo { echo } => node.reply(
-                message,
-                serde_json::json!({
-                    "type": "echo_ok",
-                    "echo": echo,
-                }),
-            ),
+            Request::Echo { echo } => {
+                node.reply(
+                    message,
+                    serde_json::json!({
+                        "type": "echo_ok",
+                        "echo": echo,
+                    }),
+                )
+                .await
+            }
             _ => {
                 return Err(RPCError::NotSupported(
                     "Operation not supported".to_string(),
